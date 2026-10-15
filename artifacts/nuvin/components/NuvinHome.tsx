@@ -5,6 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Dimensions,
   Keyboard,
   Linking,
   Modal,
@@ -50,6 +51,7 @@ type FeedItem =
 type MedicationStatus = 'due' | 'taken' | 'snoozed' | 'skipped' | 'help';
 
 const KEYS = {
+  profileAge: 'nuvin:profileAge',
   audio: 'nuvin:audio',
   memories: 'nuvin:memories',
   feed: 'nuvin:feed',
@@ -89,7 +91,7 @@ const seedFeed: FeedItem[] = [
     id: 'hello',
     kind: 'text',
     sender: 'nuvin',
-    text: "Good afternoon. Aapka BP medicine lene ka samay ho gaya hai. I'm right here with you.",
+    text: "Good afternoon. I'm here if you need a reminder or a quiet moment.",
   },
   { id: 'medicine-card', kind: 'medication' },
   { id: 'memory-card', kind: 'memory', memoryId: 'memory-aarav' },
@@ -203,7 +205,7 @@ function VoiceOrb({
         />
       </View>
       <Text style={[styles.orbStatus, elderly && styles.largeBody]}>{labels[state]}</Text>
-      <Text style={styles.orbHint}>Tap the orb to speak, or say “Hey Nuvin”</Text>
+      <Text style={styles.orbHint}>Tap the orb to preview voice states</Text>
     </View>
   );
 }
@@ -255,7 +257,11 @@ function MemoryEntry({
         accessibilityRole="button"
         accessibilityLabel={`Forget memory: ${memory.text}`}
         onPress={() => onForget(memory.id)}
-        style={({ pressed }) => [styles.forgetLink, pressed && styles.pressed]}
+        style={({ pressed }) => [
+          styles.forgetLink,
+          elderly && { minHeight: 56 },
+          pressed && styles.pressed,
+        ]}
         testID={`forget-${memory.id}`}
       >
         <Ionicons name="trash-outline" size={15} color="#F08A91" />
@@ -273,6 +279,7 @@ export default function NuvinHome() {
   const [audioMode, setAudioMode] = useState<AudioMode>('speaker');
   const [feed, setFeed] = useState<FeedItem[]>(seedFeed);
   const [memories, setMemories] = useState<Memory[]>(seedMemories);
+  const [profileAge, setProfileAge] = useState('');
   const [medicationStatus, setMedicationStatus] = useState<MedicationStatus>('due');
   const [input, setInput] = useState('');
   const [vaultOpen, setVaultOpen] = useState(false);
@@ -289,9 +296,15 @@ export default function NuvinHome() {
   const [sirenPreview, setSirenPreview] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [notice, setNotice] = useState('');
-  const elderly = false;
-  const touchSize = 46;
-  const titleSize = 22;
+  const parsedAge = Number(profileAge);
+  const elderly = profileAge.trim() !== '' && Number.isFinite(parsedAge) && parsedAge >= 55;
+  const touchSize = elderly ? 56 : 46;
+  const titleSize = elderly ? 28 : 22;
+  const viewportWidth = Dimensions.get('window').width;
+  const vaultOffset = useSharedValue(viewportWidth);
+  const vaultPanelStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: vaultOffset.value }],
+  }));
 
   useEffect(() => {
     let alive = true;
@@ -302,6 +315,7 @@ export default function NuvinHome() {
         const values = Object.fromEntries(
           Object.values(KEYS).map((key, index) => [key, storedValues[index]?.[1] ?? null]),
         ) as Record<string, string | null>;
+        const savedProfileAge = values[KEYS.profileAge];
         const savedAudio = values[KEYS.audio];
         const savedMemories = values[KEYS.memories];
         const savedFeed = values[KEYS.feed];
@@ -310,6 +324,7 @@ export default function NuvinHome() {
         const savedCompanion = values[KEYS.companion];
         const savedKinName = values[KEYS.kinName];
         const savedKinPhone = values[KEYS.kinPhone];
+        if (savedProfileAge) setProfileAge(savedProfileAge);
         if (savedAudio === 'speaker' || savedAudio === 'call') {
           setAudioMode(savedAudio);
         }
@@ -346,6 +361,10 @@ export default function NuvinHome() {
   }, []);
 
   useEffect(() => {
+    vaultOffset.value = withTiming(vaultOpen ? 0 : viewportWidth, { duration: 260 });
+  }, [vaultOpen, vaultOffset, viewportWidth]);
+
+  useEffect(() => {
     if (!sosOpen || !sosActive || sosComplete) return undefined;
     if (sosCount <= 0) {
       setSosComplete(true);
@@ -359,6 +378,7 @@ export default function NuvinHome() {
   useEffect(() => {
     if (!hydrated) return;
     void AsyncStorage.multiSet([
+      [KEYS.profileAge, profileAge],
       [KEYS.audio, audioMode],
       [KEYS.memories, JSON.stringify(memories)],
       [KEYS.feed, JSON.stringify(feed)],
@@ -378,6 +398,7 @@ export default function NuvinHome() {
     kinPhone,
     medicationStatus,
     memories,
+    profileAge,
   ]);
 
   const statusLabel = useMemo(() => {
@@ -503,7 +524,18 @@ export default function NuvinHome() {
   };
 
   const renderFeedItem = (item: FeedItem) => {
-    if (item.kind === 'text') return <TextBubble key={item.id} item={item} elderly={elderly} />;
+    if (item.kind === 'text') {
+      const personalized =
+        item.id === 'hello'
+          ? {
+              ...item,
+              text: elderly
+              ? `Namaste ji. Aapka BP medicine lene ka samay ho gaya hai. ${companionName} yahin hai.`
+              : `Good afternoon. I'm ${companionName}, here if you need a reminder or a quiet moment.`,
+            }
+          : item;
+      return <TextBubble key={item.id} item={personalized} elderly={elderly} />;
+    }
     if (item.kind === 'medication') {
       return (
         <View key={item.id} style={styles.actionCard}>
@@ -596,7 +628,11 @@ export default function NuvinHome() {
             accessibilityRole="button"
             accessibilityLabel="Forget this memory"
             onPress={() => forgetMemory(saved.id)}
-            style={({ pressed }) => [styles.forgetCardButton, pressed && styles.pressed]}
+            style={({ pressed }) => [
+              styles.forgetCardButton,
+              elderly && { minHeight: 56 },
+              pressed && styles.pressed,
+            ]}
           >
             <Ionicons name="trash-outline" size={16} color="#F08A91" />
             <Text style={styles.forgetText}>Forget this</Text>
@@ -621,10 +657,12 @@ export default function NuvinHome() {
         <View style={styles.helplineRow}>
           <HelplinePill
             label="Tele-MANAS · 14416"
+            elderly={elderly}
             onPress={() => void openHelpline('14416')}
           />
           <HelplinePill
             label="KIRAN · 1800-599-0019"
+            elderly={elderly}
             onPress={() => void openHelpline('1800-599-0019')}
           />
         </View>
@@ -731,9 +769,7 @@ export default function NuvinHome() {
           </View>
           <View style={styles.disclaimer}>
             <Ionicons name="information-circle-outline" size={14} color="#8493AA" />
-            <Text style={styles.disclaimerText}>
-              Conversation preview · replies are saved on this device
-            </Text>
+            <Text style={styles.disclaimerText}>Sample responses · AI service not connected</Text>
           </View>
         </ScrollView>
 
@@ -762,9 +798,7 @@ export default function NuvinHome() {
                 }}
               />
             </View>
-            {audioMode === 'call' ? (
-              <Text style={styles.audioNote}>Private earpiece mode selected</Text>
-            ) : null}
+            <Text style={styles.audioNote}>Audio mode preview only · playback isn’t connected</Text>
           </View>
           <View style={styles.inputRow}>
             <TextInput
@@ -785,7 +819,7 @@ export default function NuvinHome() {
             />
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Start or change voice mode"
+              accessibilityLabel="Preview voice states"
               onPress={speak}
               style={({ pressed }) => [
                 styles.micButton,
@@ -818,20 +852,21 @@ export default function NuvinHome() {
 
       <Modal
         visible={vaultOpen}
-        animationType="slide"
+        animationType="none"
         transparent
         onRequestClose={() => setVaultOpen(false)}
       >
-        <View style={styles.modalBackdrop}>
+        <View style={styles.drawerLayer}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Close Memory Vault"
             onPress={() => setVaultOpen(false)}
             style={styles.backdropDismiss}
           />
-          <View
+          <Animated.View
             style={[
               styles.vaultPanel,
+              vaultPanelStyle,
               { paddingTop: Math.max(insets.top, 20), paddingBottom: Math.max(insets.bottom, 18) },
             ]}
           >
@@ -845,7 +880,7 @@ export default function NuvinHome() {
                 accessibilityRole="button"
                 accessibilityLabel="Close Memory Vault"
                 onPress={() => setVaultOpen(false)}
-                style={styles.closeButton}
+                style={[styles.closeButton, elderly && styles.elderTapTarget]}
               >
                 <Ionicons name="close" size={21} color="#C7D3E2" />
               </Pressable>
@@ -853,6 +888,24 @@ export default function NuvinHome() {
             <Text style={styles.drawerIntro}>
               You’re in control. Memories stay on this device, and you can forget any of them at any time.
             </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Edit your personal setup"
+                onPress={() => {
+                  setVaultOpen(false);
+                  setOnboardingStep(0);
+                  setOnboardingOpen(true);
+                }}
+                style={({ pressed }) => [
+                  styles.editProfileButton,
+                  elderly && { minHeight: 56 },
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Ionicons name="person-outline" size={16} color="#75D9E7" />
+                <Text style={styles.editProfileText}>Edit your setup</Text>
+                <Ionicons name="chevron-forward" size={16} color="#8290A4" />
+              </Pressable>
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.memoryList}>
               {categories.map((category) => {
                 const group = memories.filter((memory) => memory.category === category);
@@ -882,7 +935,7 @@ export default function NuvinHome() {
               <Ionicons name="shield-checkmark-outline" size={16} color="#48CAE4" />
               <Text style={styles.vaultFootText}>Stored locally · never sent from this demo</Text>
             </View>
-          </View>
+          </Animated.View>
         </View>
       </Modal>
 
@@ -902,7 +955,7 @@ export default function NuvinHome() {
                 accessibilityRole="button"
                 accessibilityLabel="Skip setup"
                 onPress={completeOnboarding}
-                style={styles.skipButton}
+                style={[styles.skipButton, elderly && styles.elderTapTarget]}
               >
                 <Text style={styles.skipText}>Skip for now</Text>
               </Pressable>
@@ -922,6 +975,24 @@ export default function NuvinHome() {
                   <Text style={styles.onboardingCopy}>
                     A calm place to talk, reflect, and keep the little things that matter.
                   </Text>
+                  <Text style={styles.fieldLabel}>YOUR AGE · OPTIONAL</Text>
+                  <TextInput
+                    accessibilityLabel="Your age"
+                    accessibilityHint="Used to adapt text size and conversation tone. Saved only on this device."
+                    value={profileAge}
+                    onChangeText={(value) => setProfileAge(value.replace(/[^0-9]/g, '').slice(0, 3))}
+                    placeholder="Enter age"
+                    placeholderTextColor="#8290A4"
+                    keyboardType="number-pad"
+                    style={styles.onboardingInput}
+                    maxLength={3}
+                  />
+                  <View style={styles.privacyNote}>
+                    <Ionicons name="lock-closed-outline" size={15} color="#48CAE4" />
+                    <Text style={styles.privacyNoteText}>
+                      Used to adapt your experience. Stored on this device only.
+                    </Text>
+                  </View>
                 </>
               ) : null}
               {onboardingStep === 1 ? (
@@ -945,7 +1016,11 @@ export default function NuvinHome() {
                       <Pressable
                         key={name}
                         onPress={() => setCompanionName(name)}
-                        style={[styles.nameSuggestion, companionName === name && styles.nameSuggestionActive]}
+                        style={[
+                          styles.nameSuggestion,
+                          elderly && { minHeight: 56 },
+                          companionName === name && styles.nameSuggestionActive,
+                        ]}
                       >
                         <Text style={[styles.nameSuggestionText, companionName === name && styles.nameSuggestionTextActive]}>{name}</Text>
                       </Pressable>
@@ -990,7 +1065,7 @@ export default function NuvinHome() {
                 <>
                   <Text style={styles.onboardingTitle}>Find a voice that feels right</Text>
                   <Text style={styles.onboardingCopy}>
-                    Choose a sample to preview. No microphone recording is made in this setup.
+                    Choose a visual voice style. No microphone recording is made or audio played in this preview.
                   </Text>
                   <View style={styles.voiceSampleList}>
                     {['Calm and gentle', 'Warm and familiar', 'Clear and steady'].map((sample, index) => (
@@ -1021,9 +1096,7 @@ export default function NuvinHome() {
                       </Pressable>
                     ))}
                   </View>
-                  <Text style={styles.voicePreviewNotice}>
-                    Voice enrollment is a visual preview only. Microphone access is not used.
-                  </Text>
+                  <Text style={styles.voicePreviewNotice}>Voice enrollment is a visual preview only. Microphone access is not used.</Text>
                 </>
               ) : null}
             </ScrollView>
@@ -1033,7 +1106,10 @@ export default function NuvinHome() {
                   accessibilityRole="button"
                   accessibilityLabel="Go to previous setup step"
                   onPress={() => setOnboardingStep((step) => Math.max(0, step - 1))}
-                  style={styles.backButton}
+                  style={[
+                    styles.backButton,
+                    elderly && { width: 56, height: 56, minWidth: 56, minHeight: 56 },
+                  ]}
                 >
                   <Ionicons name="arrow-back" size={19} color="#B8C6D8" />
                 </Pressable>
@@ -1042,10 +1118,17 @@ export default function NuvinHome() {
                 accessibilityRole="button"
                 onPress={() => {
                   pressFeedback();
+                  if (onboardingStep === 0 && profileAge.trim() !== '') {
+                    const enteredAge = Number(profileAge);
+                    if (!Number.isInteger(enteredAge) || enteredAge < 18 || enteredAge > 120) {
+                      Alert.alert('Check your age', 'Enter an age from 18 to 120, or leave this optional field blank.');
+                      return;
+                    }
+                  }
                   if (onboardingStep === 3) completeOnboarding();
                   else setOnboardingStep((step) => step + 1);
                 }}
-                style={styles.continueButton}
+                style={[styles.continueButton, elderly && { minHeight: 56 }]}
                 testID="onboarding-continue"
               >
                 <Text style={styles.continueText}>
@@ -1078,7 +1161,7 @@ export default function NuvinHome() {
                 accessibilityRole="button"
                 accessibilityLabel="Close SOS safety preview"
                 onPress={() => setSosOpen(false)}
-                style={styles.closeButton}
+                style={[styles.closeButton, elderly && styles.elderTapTarget]}
               >
                 <Ionicons name="close" size={21} color="#C7D3E2" />
               </Pressable>
@@ -1146,7 +1229,11 @@ export default function NuvinHome() {
                 <Pressable
                   accessibilityRole="button"
                   onPress={startSosPreview}
-                  style={({ pressed }) => [styles.startSosButton, pressed && styles.pressed]}
+                  style={({ pressed }) => [
+                    styles.startSosButton,
+                    elderly && { minHeight: 56 },
+                    pressed && styles.pressed,
+                  ]}
                   testID="start-sos-preview"
                 >
                   <Ionicons name="alert-circle-outline" size={20} color="#FFFFFF" />
@@ -1160,7 +1247,11 @@ export default function NuvinHome() {
                     setSosActive(false);
                     setSosOpen(false);
                   }}
-                  style={({ pressed }) => [styles.cancelSosButton, pressed && styles.pressed]}
+                  style={({ pressed }) => [
+                    styles.cancelSosButton,
+                    elderly && { minHeight: 56 },
+                    pressed && styles.pressed,
+                  ]}
                   testID="cancel-sos"
                 >
                   <Text style={styles.cancelSosText}>Cancel preview</Text>
@@ -1170,7 +1261,7 @@ export default function NuvinHome() {
                 <Pressable
                   accessibilityRole="button"
                   onPress={() => setSosOpen(false)}
-                  style={styles.cancelSosButton}
+                  style={[styles.cancelSosButton, elderly && { minHeight: 56 }]}
                 >
                   <Text style={styles.cancelSosText}>Close</Text>
                 </Pressable>
@@ -1230,12 +1321,24 @@ function ActionPill({
   );
 }
 
-function HelplinePill({ label, onPress }: { label: string; onPress: () => void }) {
+function HelplinePill({
+  label,
+  elderly,
+  onPress,
+}: {
+  label: string;
+  elderly: boolean;
+  onPress: () => void;
+}) {
   return (
     <Pressable
       accessibilityRole="link"
       onPress={onPress}
-      style={({ pressed }) => [styles.helplineButton, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.helplineButton,
+        elderly && { minHeight: 56 },
+        pressed && styles.pressed,
+      ]}
     >
       <Ionicons name="call-outline" size={15} color="#48CAE4" />
       <Text style={styles.helplineText}>{label}</Text>
@@ -1263,7 +1366,7 @@ function AudioChoice({
       onPress={onPress}
       style={({ pressed }) => [
         styles.audioChoice,
-        { minHeight: elderly ? 52 : 40 },
+        { minHeight: elderly ? 56 : 40 },
         active && styles.audioChoiceActive,
         pressed && styles.pressed,
       ]}
@@ -1870,16 +1973,21 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     backgroundColor: 'rgba(3,8,19,0.74)',
   },
+  drawerLayer: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(3,8,19,0.74)',
+  },
   backdropDismiss: {
     ...StyleSheet.absoluteFill,
   },
   vaultPanel: {
-    height: '91%',
-    width: '100%',
-    maxWidth: 640,
-    alignSelf: 'center',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
+    height: '100%',
+    width: '91%',
+    maxWidth: 560,
+    borderTopLeftRadius: 26,
+    borderBottomLeftRadius: 26,
     backgroundColor: '#111D35',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
@@ -1920,12 +2028,34 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: 'rgba(255,255,255,0.07)',
   },
+  elderTapTarget: {
+    minWidth: 56,
+    minHeight: 56,
+  },
   drawerIntro: {
     color: '#AAB7C9',
     fontSize: 13,
     lineHeight: 20,
     marginTop: 12,
     marginBottom: 18,
+  },
+  editProfileButton: {
+    minHeight: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    paddingHorizontal: 12,
+    marginBottom: 14,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(72,202,228,0.2)',
+    backgroundColor: 'rgba(72,202,228,0.06)',
+  },
+  editProfileText: {
+    flex: 1,
+    color: '#B9EAF0',
+    fontSize: 12,
+    fontWeight: '600',
   },
   memoryList: {
     paddingBottom: 18,

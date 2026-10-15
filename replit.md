@@ -1,6 +1,6 @@
-# [Project name]
+# Nuvin
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Nuvin is a consent-first native companion for everyday support, medication reminders, emotional reflection, and private memory keeping.
 
 ## Run & Operate
 
@@ -22,15 +22,20 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/nuvin/` — Expo iOS and Android app
+- `artifacts/api-server/` — shared Express API server
+- `lib/api-spec/openapi.yaml` — shared API contract
+- `artifacts/nuvin/constants/colors.ts` — mobile theme tokens
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Age is asked privately during setup and stored locally on the device. It selects Nuvin's tone and text sizing automatically; never expose persona labels or a persona switcher.
+- The first preview keeps memories, profile age, reminder state, and sample chat history in local storage.
+- Voice interaction and emergency dispatch are previews only; the app does not currently play voice audio, send caregiver alerts, or share live location.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Nuvin offers a single tab-free conversation space, accessible typography, a voice-state orb, medicine reminder actions, a categorized Memory Vault with instant deletion, crisis helpline links, and a safety preview with a cancellable countdown.
 
 ## User preferences
 
