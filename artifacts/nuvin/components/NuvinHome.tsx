@@ -30,7 +30,6 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 
-type Persona = 'elder' | 'friend';
 type OrbState = 'idle' | 'listening' | 'thinking' | 'speaking';
 type AudioMode = 'speaker' | 'call';
 type MemoryCategory =
@@ -51,7 +50,6 @@ type FeedItem =
 type MedicationStatus = 'due' | 'taken' | 'snoozed' | 'skipped' | 'help';
 
 const KEYS = {
-  persona: 'nuvin:persona',
   audio: 'nuvin:audio',
   memories: 'nuvin:memories',
   feed: 'nuvin:feed',
@@ -271,7 +269,6 @@ export default function NuvinHome() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const pressFeedback = usePressFeedback();
-  const [persona, setPersona] = useState<Persona>('elder');
   const [orbState, setOrbState] = useState<OrbState>('idle');
   const [audioMode, setAudioMode] = useState<AudioMode>('speaker');
   const [feed, setFeed] = useState<FeedItem[]>(seedFeed);
@@ -292,11 +289,9 @@ export default function NuvinHome() {
   const [sirenPreview, setSirenPreview] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [notice, setNotice] = useState('');
-  const elderly = persona === 'elder';
-  const touchSize = elderly ? 56 : 46;
-  const bodySize = elderly ? 20 : 15;
-  const titleSize = elderly ? 28 : 22;
-  const smallSize = elderly ? 15 : 12;
+  const elderly = false;
+  const touchSize = 46;
+  const titleSize = 22;
 
   useEffect(() => {
     let alive = true;
@@ -307,7 +302,6 @@ export default function NuvinHome() {
         const values = Object.fromEntries(
           Object.values(KEYS).map((key, index) => [key, storedValues[index]?.[1] ?? null]),
         ) as Record<string, string | null>;
-        const savedPersona = values[KEYS.persona];
         const savedAudio = values[KEYS.audio];
         const savedMemories = values[KEYS.memories];
         const savedFeed = values[KEYS.feed];
@@ -316,9 +310,6 @@ export default function NuvinHome() {
         const savedCompanion = values[KEYS.companion];
         const savedKinName = values[KEYS.kinName];
         const savedKinPhone = values[KEYS.kinPhone];
-        if (savedPersona === 'elder' || savedPersona === 'friend') {
-          setPersona(savedPersona);
-        }
         if (savedAudio === 'speaker' || savedAudio === 'call') {
           setAudioMode(savedAudio);
         }
@@ -368,7 +359,6 @@ export default function NuvinHome() {
   useEffect(() => {
     if (!hydrated) return;
     void AsyncStorage.multiSet([
-      [KEYS.persona, persona],
       [KEYS.audio, audioMode],
       [KEYS.memories, JSON.stringify(memories)],
       [KEYS.feed, JSON.stringify(feed)],
@@ -388,7 +378,6 @@ export default function NuvinHome() {
     kinPhone,
     medicationStatus,
     memories,
-    persona,
   ]);
 
   const statusLabel = useMemo(() => {
@@ -704,32 +693,6 @@ export default function NuvinHome() {
           </View>
         </View>
 
-        <View style={styles.personaRail}>
-          <Text style={[styles.personaPrompt, { fontSize: smallSize }]}>Your space</Text>
-          <View style={styles.personaSegment}>
-            <PersonaChoice
-              active={persona === 'elder'}
-              elderly={elderly}
-              icon="sunny-outline"
-              label="Elder · 55+"
-              onPress={() => {
-                pressFeedback();
-                setPersona('elder');
-              }}
-            />
-            <PersonaChoice
-              active={persona === 'friend'}
-              elderly={elderly}
-              icon="headset-outline"
-              label="Ear · 20–50"
-              onPress={() => {
-                pressFeedback();
-                setPersona('friend');
-              }}
-            />
-          </View>
-        </View>
-
         <ScrollView
           style={styles.mainScroll}
           contentContainerStyle={styles.mainContent}
@@ -741,7 +704,7 @@ export default function NuvinHome() {
             <View>
               <Text style={styles.dayLabel}>A LITTLE SPACE FOR YOU</Text>
               <Text style={[styles.welcomeTitle, { fontSize: titleSize }]}>
-                {elderly ? 'Namaste, ji.' : 'Take a breath.'}
+                Take a breath.
               </Text>
             </View>
             <View style={styles.privateTag}>
@@ -810,7 +773,7 @@ export default function NuvinHome() {
               value={input}
               onChangeText={setInput}
               onSubmitEditing={sendText}
-              placeholder={elderly ? 'Aap kya soch rahe hain?' : 'Type a thought or question…'}
+              placeholder="Type a thought or question…"
               placeholderTextColor="#8290A4"
               returnKeyType="send"
               blurOnSubmit
@@ -957,24 +920,8 @@ export default function NuvinHome() {
                 <>
                   <Text style={styles.onboardingTitle}>Welcome to Nuvin</Text>
                   <Text style={styles.onboardingCopy}>
-                    A calm place to talk, reflect, and keep the little things that matter. Choose how you’d like Nuvin to speak with you.
+                    A calm place to talk, reflect, and keep the little things that matter.
                   </Text>
-                  <PersonaOnboardingChoice
-                    active={persona === 'elder'}
-                    elderly
-                    title="Elder mode · 55+"
-                    description="Larger text, simpler prompts, a respectful tone."
-                    icon="sunny-outline"
-                    onPress={() => setPersona('elder')}
-                  />
-                  <PersonaOnboardingChoice
-                    active={persona === 'friend'}
-                    elderly
-                    title="Ear mode · 20–50"
-                    description="A warm, peer-like space to unwind and reflect."
-                    icon="headset-outline"
-                    onPress={() => setPersona('friend')}
-                  />
                 </>
               ) : null}
               {onboardingStep === 1 ? (
@@ -1239,79 +1186,6 @@ export default function NuvinHome() {
   );
 }
 
-function PersonaChoice({
-  active,
-  elderly,
-  icon,
-  label,
-  onPress,
-}: {
-  active: boolean;
-  elderly: boolean;
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityState={{ selected: active }}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.personaChoice,
-        { minHeight: elderly ? 56 : 46 },
-        active && styles.personaChoiceActive,
-        pressed && styles.pressed,
-      ]}
-    >
-      <Ionicons name={icon} size={16} color={active ? '#48CAE4' : '#9EACC0'} />
-      <Text style={[styles.personaChoiceText, active && styles.personaChoiceTextActive]}>{label}</Text>
-    </Pressable>
-  );
-}
-
-function PersonaOnboardingChoice({
-  active,
-  elderly,
-  title,
-  description,
-  icon,
-  onPress,
-}: {
-  active: boolean;
-  elderly: boolean;
-  title: string;
-  description: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityState={{ selected: active }}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.onboardingPersona,
-        active && styles.onboardingPersonaActive,
-        pressed && styles.pressed,
-      ]}
-    >
-      <View style={styles.onboardingPersonaIcon}>
-        <Ionicons name={icon} size={21} color={active ? '#48CAE4' : '#9EACC0'} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={[styles.onboardingPersonaTitle, elderly && styles.largeBody]}>{title}</Text>
-        <Text style={styles.onboardingPersonaDescription}>{description}</Text>
-      </View>
-      <Ionicons
-        name={active ? 'radio-button-on' : 'radio-button-off'}
-        size={20}
-        color={active ? '#48CAE4' : '#65758B'}
-      />
-    </Pressable>
-  );
-}
-
 function ActionPill({
   label,
   icon,
@@ -1490,50 +1364,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     letterSpacing: 0.8,
-  },
-  personaRail: {
-    paddingHorizontal: 18,
-    paddingTop: 6,
-    paddingBottom: 9,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.055)',
-  },
-  personaPrompt: {
-    color: '#8290A4',
-    fontSize: 11,
-    marginBottom: 7,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    fontWeight: '600',
-  },
-  personaSegment: {
-    flexDirection: 'row',
-    padding: 4,
-    gap: 4,
-    borderRadius: 16,
-    backgroundColor: '#111D36',
-  },
-  personaChoice: {
-    flex: 1,
-    minHeight: 46,
-    flexDirection: 'row',
-    gap: 7,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 12,
-  },
-  personaChoiceActive: {
-    backgroundColor: '#1C2B49',
-    borderWidth: 1,
-    borderColor: 'rgba(72,202,228,0.28)',
-  },
-  personaChoiceText: {
-    color: '#9EACC0',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  personaChoiceTextActive: {
-    color: '#E8F8FC',
   },
   mainScroll: {
     flex: 1,
