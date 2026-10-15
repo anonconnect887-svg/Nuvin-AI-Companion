@@ -1,0 +1,24 @@
+kind = "mobile"
+previewPath = "/nuvin/"
+title = "Nuvin"
+description = "A consent-first voice companion for everyday support, with accessible elder mode, medication reminders, private journaling, a memory vault, and emergency support tools."
+version = "1.0.0"
+id = "artifacts/nuvin"
+router = "expo-domain"
+
+[[services]]
+name = "expo"
+ensurePreviewReachable = "/status"
+paths = [ "/nuvin/" ]
+localPort = 23437
+
+[services.development]
+run = "pnpm --filter @workspace/nuvin run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/nuvin", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/nuvin", "run", "serve" ]
+
+[services.env]
+PORT = "23437"
+BASE_PATH = "/nuvin/"
