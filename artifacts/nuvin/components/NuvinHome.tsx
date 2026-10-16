@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import { useClerk, useUser } from '@clerk/expo';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -29,10 +30,12 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { NuvinMark } from '@/components/NuvinMark';
 import { useColors } from '@/hooks/useColors';
 
 type OrbState = 'idle' | 'listening' | 'thinking' | 'speaking';
 type AudioMode = 'speaker' | 'call';
+type InteractionMode = 'chat' | 'voice';
 type MemoryCategory =
   | 'Health & Medication'
   | 'Family & Relationships'
@@ -61,6 +64,10 @@ const KEYS = {
   kinName: 'nuvin:kinName',
   kinPhone: 'nuvin:kinPhone',
 };
+
+function scopedStorageKey(key: string, userId: string) {
+  return `${key}:${userId}`;
+}
 
 const seedMemories: Memory[] = [
   {
@@ -94,7 +101,6 @@ const seedFeed: FeedItem[] = [
     text: "Good afternoon. I'm here if you need a reminder or a quiet moment.",
   },
   { id: 'medicine-card', kind: 'medication' },
-  { id: 'memory-card', kind: 'memory', memoryId: 'memory-aarav' },
 ];
 
 const categories: MemoryCategory[] = [
@@ -274,15 +280,21 @@ function MemoryEntry({
 export default function NuvinHome() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const { user } = useUser();
+  const { signOut } = useClerk();
+  const userId = user?.id ?? 'signed-in-user';
   const pressFeedback = usePressFeedback();
   const [orbState, setOrbState] = useState<OrbState>('idle');
   const [audioMode, setAudioMode] = useState<AudioMode>('speaker');
+  const [interactionMode, setInteractionMode] = useState<InteractionMode>('chat');
   const [feed, setFeed] = useState<FeedItem[]>(seedFeed);
   const [memories, setMemories] = useState<Memory[]>(seedMemories);
   const [profileAge, setProfileAge] = useState('');
   const [medicationStatus, setMedicationStatus] = useState<MedicationStatus>('due');
   const [input, setInput] = useState('');
   const [vaultOpen, setVaultOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [medicineExpanded, setMedicineExpanded] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState(0);
   const [companionName, setCompanionName] = useState('Nuvin');
@@ -310,11 +322,24 @@ export default function NuvinHome() {
     let alive = true;
     const load = async () => {
       try {
-        const storedValues = await AsyncStorage.multiGet(Object.values(KEYS));
+        const keys = Object.values(KEYS);
+        const scopedKeys = keys.map((key) => scopedStorageKey(key, userId));
+        const storedValues = await AsyncStorage.multiGet([...scopedKeys, ...keys]);
         if (!alive) return;
+        const scopedValues = storedValues.slice(0, keys.length);
+        const legacyValues = storedValues.slice(keys.length);
+        const hasScopedData = scopedValues.some(([, value]) => value !== null);
+        const sourceValues = hasScopedData ? scopedValues : legacyValues;
         const values = Object.fromEntries(
-          Object.values(KEYS).map((key, index) => [key, storedValues[index]?.[1] ?? null]),
+          keys.map((key, index) => [key, sourceValues[index]?.[1] ?? null]),
         ) as Record<string, string | null>;
+        if (!hasScopedData && legacyValues.some(([, value]) => value !== null)) {
+          const migratedValues = legacyValues.flatMap(([key, value], index) =>
+            value === null ? [] : [[scopedKeys[index], value] as [string, string]],
+          );
+          await AsyncStorage.multiSet(migratedValues);
+          await AsyncStorage.multiRemove(keys);
+        }
         const savedProfileAge = values[KEYS.profileAge];
         const savedAudio = values[KEYS.audio];
         const savedMemories = values[KEYS.memories];
@@ -358,7 +383,7 @@ export default function NuvinHome() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
     vaultOffset.value = withTiming(vaultOpen ? 0 : viewportWidth, { duration: 260 });
@@ -378,14 +403,14 @@ export default function NuvinHome() {
   useEffect(() => {
     if (!hydrated) return;
     void AsyncStorage.multiSet([
-      [KEYS.profileAge, profileAge],
-      [KEYS.audio, audioMode],
-      [KEYS.memories, JSON.stringify(memories)],
-      [KEYS.feed, JSON.stringify(feed)],
-      [KEYS.medication, medicationStatus],
-      [KEYS.companion, companionName],
-      [KEYS.kinName, kinName],
-      [KEYS.kinPhone, kinPhone],
+      [scopedStorageKey(KEYS.profileAge, userId), profileAge],
+      [scopedStorageKey(KEYS.audio, userId), audioMode],
+      [scopedStorageKey(KEYS.memories, userId), JSON.stringify(memories)],
+      [scopedStorageKey(KEYS.feed, userId), JSON.stringify(feed)],
+      [scopedStorageKey(KEYS.medication, userId), medicationStatus],
+      [scopedStorageKey(KEYS.companion, userId), companionName],
+      [scopedStorageKey(KEYS.kinName, userId), kinName],
+      [scopedStorageKey(KEYS.kinPhone, userId), kinPhone],
     ]).catch(() => {
       Alert.alert('Could not save changes', 'Please check that storage is available on this device.');
     });
@@ -399,6 +424,7 @@ export default function NuvinHome() {
     medicationStatus,
     memories,
     profileAge,
+    userId,
   ]);
 
   const statusLabel = useMemo(() => {
@@ -420,7 +446,7 @@ export default function NuvinHome() {
   const completeOnboarding = () => {
     setOnboardingOpen(false);
     setOnboardingStep(0);
-    void AsyncStorage.setItem(KEYS.onboarding, 'complete').catch(() => {
+    void AsyncStorage.setItem(scopedStorageKey(KEYS.onboarding, userId), 'complete').catch(() => {
       Alert.alert('Setup not saved', 'Please try again when your device is available.');
     });
   };
@@ -438,6 +464,7 @@ export default function NuvinHome() {
   const medicationAction = (action: MedicationStatus) => {
     pressFeedback();
     setMedicationStatus(action);
+    setMedicineExpanded(false);
     if (action === 'help') {
       Alert.alert(
         'Help request preview',
@@ -549,61 +576,78 @@ export default function NuvinHome() {
               </Text>
               <Text style={styles.cardEyebrow}>{statusLabel}</Text>
             </View>
-          </View>
-          <View style={styles.medicineDetail}>
-            <Text style={[styles.cardBody, elderly && styles.largeBody]}>
-              Amlodipine 5mg · 1 tablet with warm water
-            </Text>
-          </View>
-          {medicationStatus === 'due' ? (
-            <View style={styles.actionGrid}>
-              <ActionPill
-                label="Taken"
-                icon="checkmark-circle-outline"
-                tone="success"
-                elderly={elderly}
-                onPress={() => medicationAction('taken')}
-              />
-              <ActionPill
-                label="Snooze 15m"
-                icon="time-outline"
-                tone="neutral"
-                elderly={elderly}
-                onPress={() => medicationAction('snoozed')}
-              />
-              <ActionPill
-                label="Skip today"
-                icon="play-skip-forward-outline"
-                tone="neutral"
-                elderly={elderly}
-                onPress={() => medicationAction('skipped')}
-              />
-              <ActionPill
-                label="Need help"
-                icon="help-buoy-outline"
-                tone="danger"
-                elderly={elderly}
-                onPress={() => medicationAction('help')}
-              />
-            </View>
-          ) : (
-            <View style={styles.doneStatus}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ expanded: medicineExpanded }}
+              accessibilityLabel={medicineExpanded ? 'Hide medicine details' : 'Show medicine details'}
+              onPress={() => setMedicineExpanded((expanded) => !expanded)}
+              style={styles.medicationExpand}
+            >
               <Ionicons
-                name={medicationStatus === 'taken' ? 'checkmark-circle' : 'information-circle'}
+                name={medicineExpanded ? 'chevron-up' : 'chevron-down'}
                 size={18}
-                color={medicationStatus === 'taken' ? '#64DDAA' : '#FFB703'}
+                color="#AAB7C9"
               />
-              <Text style={styles.doneStatusText}>{statusLabel}</Text>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Undo medication reminder action"
-                onPress={() => medicationAction('due')}
-                style={styles.undoButton}
-              >
-                <Text style={styles.undoText}>Undo</Text>
-              </Pressable>
-            </View>
-          )}
+            </Pressable>
+          </View>
+          {medicineExpanded ? (
+            <>
+              <View style={styles.medicineDetail}>
+                <Text style={[styles.cardBody, elderly && styles.largeBody]}>
+                  Amlodipine 5mg · 1 tablet with warm water
+                </Text>
+              </View>
+              {medicationStatus === 'due' ? (
+                <View style={styles.actionGrid}>
+                  <ActionPill
+                    label="Taken"
+                    icon="checkmark-circle-outline"
+                    tone="success"
+                    elderly={elderly}
+                    onPress={() => medicationAction('taken')}
+                  />
+                  <ActionPill
+                    label="Snooze 15m"
+                    icon="time-outline"
+                    tone="neutral"
+                    elderly={elderly}
+                    onPress={() => medicationAction('snoozed')}
+                  />
+                  <ActionPill
+                    label="Skip today"
+                    icon="play-skip-forward-outline"
+                    tone="neutral"
+                    elderly={elderly}
+                    onPress={() => medicationAction('skipped')}
+                  />
+                  <ActionPill
+                    label="Need help"
+                    icon="help-buoy-outline"
+                    tone="danger"
+                    elderly={elderly}
+                    onPress={() => medicationAction('help')}
+                  />
+                </View>
+              ) : (
+                <View style={styles.doneStatus}>
+                  <Ionicons
+                    name={medicationStatus === 'taken' ? 'checkmark-circle' : 'information-circle'}
+                    size={18}
+                    color={medicationStatus === 'taken' ? '#64DDAA' : '#FFB703'}
+                  />
+                  <Text style={styles.doneStatusText}>{statusLabel}</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Undo medication reminder action"
+                    onPress={() => medicationAction('due')}
+                    style={styles.undoButton}
+                  >
+                    <Text style={styles.undoText}>Undo</Text>
+                  </Pressable>
+                </View>
+              )}
+            </>
+          ) : null}
         </View>
       );
     }
@@ -686,33 +730,31 @@ export default function NuvinHome() {
       >
         <View style={styles.header}>
           <View style={styles.brand}>
-            <View style={styles.brandMark}>
-              <Ionicons name="pulse" size={20} color="#0B132B" />
-            </View>
+            <NuvinMark size={40} />
             <View>
               <Text style={styles.brandName}>nuvin</Text>
               <View style={styles.onlineRow}>
                 <View style={styles.onlineDot} />
-                <Text style={styles.onlineLabel}>Here with you</Text>
+                <Text style={styles.onlineLabel}>A little more support</Text>
               </View>
             </View>
           </View>
           <View style={styles.headerActions}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Open Memory Vault"
+              accessibilityLabel="Open your profile"
               onPress={() => {
                 pressFeedback();
-                setVaultOpen(true);
+                setProfileOpen(true);
               }}
               style={({ pressed }) => [
                 styles.headerIconButton,
                 { minWidth: touchSize, minHeight: touchSize },
                 pressed && styles.pressed,
               ]}
-              testID="open-vault"
+              testID="open-profile"
             >
-              <Ionicons name="bookmark-outline" size={20} color="#B6C5D8" />
+              <Ionicons name="person-circle-outline" size={22} color="#B6C5D8" />
             </Pressable>
             <Pressable
               accessibilityRole="button"
@@ -740,7 +782,7 @@ export default function NuvinHome() {
         >
           <View style={styles.welcomeLine}>
             <View>
-              <Text style={styles.dayLabel}>A LITTLE SPACE FOR YOU</Text>
+              <Text style={styles.dayLabel}>YOUR SPACE</Text>
               <Text style={[styles.welcomeTitle, { fontSize: titleSize }]}>
                 Take a breath.
               </Text>
@@ -751,104 +793,306 @@ export default function NuvinHome() {
             </View>
           </View>
 
-          <VoiceOrb state={orbState} onPress={speak} elderly={elderly} />
-
-          <View style={styles.streamHeading}>
-            <View>
-              <Text style={styles.streamTitle}>A moment together</Text>
-              <Text style={styles.streamSubhead}>Small things, at your pace</Text>
-            </View>
-            <View style={styles.todayPill}>
-              <View style={styles.onlineDot} />
-              <Text style={styles.todayText}>Today</Text>
-            </View>
+          <View
+            accessibilityRole="tablist"
+            style={[
+              styles.modeSwitch,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
+            {([
+              ['chat', 'Chat', 'chatbubble-ellipses-outline'],
+              ['voice', 'Voice', 'mic-outline'],
+            ] as const).map(([mode, label, icon]) => {
+              const selected = interactionMode === mode;
+              return (
+                <Pressable
+                  key={mode}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={`Switch to ${label.toLowerCase()} mode`}
+                  onPress={() => {
+                    pressFeedback();
+                    setInteractionMode(mode);
+                  }}
+                  style={[
+                    styles.modeOption,
+                    selected && { backgroundColor: colors.primary },
+                  ]}
+                >
+                  <Ionicons
+                    name={icon}
+                    size={17}
+                    color={selected ? colors.primaryForeground : colors.mutedForeground}
+                  />
+                  <Text
+                    style={[
+                      styles.modeOptionText,
+                      { color: selected ? colors.primaryForeground : colors.mutedForeground },
+                    ]}
+                  >
+                    {label}
+                  </Text>
+                </Pressable>
+              );
+            })}
           </View>
 
-          <View style={styles.feed}>
-            {feed.map((item) => renderFeedItem(item))}
-          </View>
-          <View style={styles.disclaimer}>
-            <Ionicons name="information-circle-outline" size={14} color="#8493AA" />
-            <Text style={styles.disclaimerText}>Sample responses · AI service not connected</Text>
-          </View>
+          {interactionMode === 'chat' ? (
+            <>
+              <View style={styles.feed}>
+                {feed.map((item) => renderFeedItem(item))}
+              </View>
+              <View style={styles.disclaimer}>
+                <Ionicons name="information-circle-outline" size={14} color="#8493AA" />
+                <Text style={styles.disclaimerText}>Sample chat · AI service not connected</Text>
+              </View>
+            </>
+          ) : (
+            <>
+              <VoiceOrb state={orbState} onPress={speak} elderly={elderly} />
+              <Text style={styles.voicePreviewText}>
+                Voice preview only. Nuvin is not listening or playing audio yet.
+              </Text>
+            </>
+          )}
         </ScrollView>
 
-        <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-          <View style={styles.audioModes}>
-            <Text style={styles.audioLabel}>AUDIO</Text>
-            <View style={styles.audioChoices}>
-              <AudioChoice
-                active={audioMode === 'speaker'}
-                elderly={elderly}
-                icon="volume-high-outline"
-                label="Speaker"
-                onPress={() => {
-                  pressFeedback();
-                  setAudioMode('speaker');
-                }}
+        <View
+          style={[
+            styles.composer,
+            {
+              paddingBottom: Math.max(insets.bottom, Platform.OS === 'web' ? 34 : 12),
+              borderTopColor: colors.border,
+              backgroundColor: colors.card,
+            },
+          ]}
+        >
+          {interactionMode === 'chat' ? (
+            <View style={styles.inputRow}>
+              <TextInput
+                accessibilityLabel="Write a message to Nuvin"
+                accessibilityHint="Enter a thought, question, or reminder"
+                value={input}
+                onChangeText={setInput}
+                onSubmitEditing={sendText}
+                placeholder="Type a thought or question…"
+                placeholderTextColor="#8290A4"
+                returnKeyType="send"
+                blurOnSubmit
+                style={[
+                  styles.textInput,
+                  { fontSize: elderly ? 17 : 15, minHeight: touchSize },
+                ]}
+                testID="message-input"
               />
-              <AudioChoice
-                active={audioMode === 'call'}
-                elderly={elderly}
-                icon="call-outline"
-                label="Call mode"
-                onPress={() => {
-                  pressFeedback();
-                  setAudioMode('call');
-                }}
-              />
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Send message"
+                onPress={sendText}
+                disabled={!input.trim()}
+                style={({ pressed }) => [
+                  styles.sendButton,
+                  { width: touchSize, height: touchSize },
+                  !input.trim() && styles.sendDisabled,
+                  pressed && styles.pressed,
+                ]}
+                testID="send-message"
+              >
+                <Ionicons name="arrow-up" size={22} color="#0B132B" />
+              </Pressable>
             </View>
-            <Text style={styles.audioNote}>Audio mode preview only · playback isn’t connected</Text>
-          </View>
-          <View style={styles.inputRow}>
-            <TextInput
-              accessibilityLabel="Write a message to Nuvin"
-              accessibilityHint="Enter a thought, question, or reminder"
-              value={input}
-              onChangeText={setInput}
-              onSubmitEditing={sendText}
-              placeholder="Type a thought or question…"
-              placeholderTextColor="#8290A4"
-              returnKeyType="send"
-              blurOnSubmit
-              style={[
-                styles.textInput,
-                { fontSize: elderly ? 17 : 15, minHeight: touchSize },
-              ]}
-              testID="message-input"
-            />
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Preview voice states"
-              onPress={speak}
-              style={({ pressed }) => [
-                styles.micButton,
-                { width: touchSize, height: touchSize },
-                pressed && styles.pressed,
-              ]}
-              testID="voice-toggle"
-            >
-              <Ionicons name="mic-outline" size={21} color="#48CAE4" />
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Send message"
-              onPress={sendText}
-              disabled={!input.trim()}
-              style={({ pressed }) => [
-                styles.sendButton,
-                { width: touchSize, height: touchSize },
-                !input.trim() && styles.sendDisabled,
-                pressed && styles.pressed,
-              ]}
-              testID="send-message"
-            >
-              <Ionicons name="arrow-up" size={22} color="#0B132B" />
-            </Pressable>
-          </View>
-          {notice ? <Text accessibilityLiveRegion="polite" style={styles.notice}>{notice}</Text> : null}
+          ) : (
+            <>
+              <View style={styles.audioModes}>
+                <Text style={styles.audioLabel}>OUTPUT PREVIEW</Text>
+                <View style={styles.audioChoices}>
+                  <AudioChoice
+                    active={audioMode === 'speaker'}
+                    elderly={elderly}
+                    icon="volume-high-outline"
+                    label="Speaker"
+                    onPress={() => {
+                      pressFeedback();
+                      setAudioMode('speaker');
+                    }}
+                  />
+                  <AudioChoice
+                    active={audioMode === 'call'}
+                    elderly={elderly}
+                    icon="call-outline"
+                    label="Call mode"
+                    onPress={() => {
+                      pressFeedback();
+                      setAudioMode('call');
+                    }}
+                  />
+                </View>
+              </View>
+              <Text style={styles.audioNote}>Audio playback is not connected.</Text>
+            </>
+          )}
+          {notice ? (
+            <Text accessibilityLiveRegion="polite" style={styles.notice}>
+              {notice}
+            </Text>
+          ) : null}
         </View>
       </KeyboardAvoidingView>
+
+      <Modal
+        visible={profileOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setProfileOpen(false)}
+      >
+        <View style={styles.profileModalBackdrop}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close profile"
+            onPress={() => setProfileOpen(false)}
+            style={styles.profileBackdropDismiss}
+          />
+          <View
+            style={[
+              styles.profileSheet,
+              {
+                backgroundColor: colors.card,
+                borderColor: colors.border,
+                paddingTop: Math.max(insets.top, 18),
+                paddingBottom: Math.max(insets.bottom, 18),
+              },
+            ]}
+          >
+            <View style={styles.profileHandle} />
+            <View style={styles.drawerHeader}>
+              <View>
+                <Text style={styles.drawerKicker}>YOUR ACCOUNT</Text>
+                <Text style={styles.drawerTitle}>Profile</Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close profile"
+                onPress={() => setProfileOpen(false)}
+                style={styles.closeButton}
+              >
+                <Ionicons name="close" size={21} color="#C7D3E2" />
+              </Pressable>
+            </View>
+
+            <View style={styles.profileIdentity}>
+              <NuvinMark size={48} />
+              <View style={styles.profileIdentityCopy}>
+                <Text style={styles.profileName}>
+                  {user?.fullName || user?.firstName || 'Nuvin member'}
+                </Text>
+                <Text style={styles.profileEmail}>
+                  {user?.primaryEmailAddress?.emailAddress || 'Signed-in account'}
+                </Text>
+              </View>
+            </View>
+
+            <ScrollView
+              style={styles.profileScroll}
+              contentContainerStyle={styles.profileScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <Text style={styles.profileSectionLabel}>PERSONAL SETUP</Text>
+              <View style={styles.profileInfoCard}>
+                <View style={styles.profileDataRow}>
+                  <Text style={styles.profileDataLabel}>Companion name</Text>
+                  <Text style={styles.profileDataValue}>{companionName}</Text>
+                </View>
+                <View style={styles.profileDivider} />
+                <View style={styles.profileDataRow}>
+                  <Text style={styles.profileDataLabel}>Age for personalization</Text>
+                  <Text style={styles.profileDataValue}>
+                    {profileAge ? 'Added privately' : 'Not shared'}
+                  </Text>
+                </View>
+                <View style={styles.profileDivider} />
+                <View style={styles.profileDataRow}>
+                  <Text style={styles.profileDataLabel}>Trusted contact</Text>
+                  <Text style={styles.profileDataValue}>
+                    {kinName.trim() || 'Not added'}
+                  </Text>
+                </View>
+              </View>
+
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Edit personal setup"
+                onPress={() => {
+                  setProfileOpen(false);
+                  setOnboardingStep(0);
+                  setOnboardingOpen(true);
+                }}
+                style={({ pressed }) => [
+                  styles.profileAction,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <View style={styles.profileActionIcon}>
+                  <Ionicons name="options-outline" size={18} color="#70D7E4" />
+                </View>
+                <View style={styles.profileActionCopy}>
+                  <Text style={styles.profileActionTitle}>Edit personal setup</Text>
+                  <Text style={styles.profileActionSub}>Preferences and trusted contact</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={17} color="#8290A4" />
+              </Pressable>
+
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Open Memory Vault"
+                onPress={() => {
+                  setProfileOpen(false);
+                  setVaultOpen(true);
+                }}
+                style={({ pressed }) => [
+                  styles.profileAction,
+                  pressed && styles.pressed,
+                ]}
+                testID="profile-memory-vault"
+              >
+                <View style={styles.profileActionIcon}>
+                  <Ionicons name="bookmark-outline" size={18} color="#70D7E4" />
+                </View>
+                <View style={styles.profileActionCopy}>
+                  <Text style={styles.profileActionTitle}>Memory Vault</Text>
+                  <Text style={styles.profileActionSub}>
+                    {memories.length} saved {memories.length === 1 ? 'memory' : 'memories'}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={17} color="#8290A4" />
+              </Pressable>
+            </ScrollView>
+
+            <View style={styles.profilePrivacy}>
+              <Ionicons name="lock-closed-outline" size={15} color="#48CAE4" />
+              <Text style={styles.profilePrivacyText}>
+                Personal setup and memories stay on this device.
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Sign out of Nuvin"
+              onPress={() => {
+                setProfileOpen(false);
+                void signOut();
+              }}
+              style={({ pressed }) => [
+                styles.signOutButton,
+                pressed && styles.pressed,
+              ]}
+              testID="sign-out"
+            >
+              <Ionicons name="log-out-outline" size={18} color="#F08A91" />
+              <Text style={styles.signOutText}>Sign out</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={vaultOpen}
@@ -948,9 +1192,7 @@ export default function NuvinHome() {
         <View style={styles.modalBackdrop}>
           <View style={styles.onboardingCard}>
             <View style={styles.onboardingTop}>
-              <View style={styles.brandMark}>
-                <Ionicons name="pulse" size={20} color="#0B132B" />
-              </View>
+              <NuvinMark size={38} />
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Skip setup"
@@ -1914,11 +2156,10 @@ const styles = StyleSheet.create({
     color: '#D6F7FA',
   },
   audioNote: {
-    position: 'absolute',
-    left: 0,
-    bottom: -13,
+    marginTop: 6,
     color: '#8493AA',
     fontSize: 9,
+    textAlign: 'center',
   },
   inputRow: {
     flexDirection: 'row',
@@ -2613,5 +2854,197 @@ const styles = StyleSheet.create({
   sosCompleteText: {
     color: '#9EE4C5',
     fontSize: 11,
+  },
+  modeSwitch: {
+    flexDirection: 'row',
+    gap: 5,
+    padding: 4,
+    marginTop: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderRadius: 16,
+  },
+  modeOption: {
+    flex: 1,
+    minHeight: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 12,
+  },
+  modeOptionText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  voicePreviewText: {
+    color: '#8493AA',
+    fontSize: 11,
+    lineHeight: 17,
+    textAlign: 'center',
+    marginHorizontal: 20,
+    marginBottom: 18,
+  },
+  medicationExpand: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+  },
+  profileModalBackdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    backgroundColor: 'rgba(4,10,22,0.72)',
+    paddingHorizontal: 10,
+  },
+  profileBackdropDismiss: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  },
+  profileSheet: {
+    width: '100%',
+    maxWidth: 520,
+    maxHeight: '91%',
+    borderWidth: 1,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 22,
+  },
+  profileHandle: {
+    alignSelf: 'center',
+    width: 38,
+    height: 4,
+    borderRadius: 4,
+    backgroundColor: '#64738A',
+    marginBottom: 18,
+  },
+  profileIdentity: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 17,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  profileIdentityCopy: {
+    flex: 1,
+  },
+  profileName: {
+    color: '#F2F6FA',
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  profileEmail: {
+    color: '#AAB7C9',
+    fontSize: 12,
+    marginTop: 4,
+  },
+  profileScroll: {
+    flex: 1,
+  },
+  profileScrollContent: {
+    paddingTop: 18,
+    paddingBottom: 12,
+  },
+  profileSectionLabel: {
+    color: '#8F9FB5',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1.3,
+    marginBottom: 9,
+  },
+  profileInfoCard: {
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.025)',
+  },
+  profileDataRow: {
+    minHeight: 47,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  profileDataLabel: {
+    color: '#9EADBF',
+    fontSize: 12,
+  },
+  profileDataValue: {
+    color: '#E6EDF4',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'right',
+  },
+  profileDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+  },
+  profileAction: {
+    minHeight: 68,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 9,
+    paddingHorizontal: 11,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.025)',
+  },
+  profileActionIcon: {
+    width: 38,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 13,
+    backgroundColor: 'rgba(72,202,228,0.1)',
+  },
+  profileActionCopy: {
+    flex: 1,
+  },
+  profileActionTitle: {
+    color: '#EAF0F6',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  profileActionSub: {
+    color: '#8998AD',
+    fontSize: 11,
+    marginTop: 4,
+  },
+  profilePrivacy: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    paddingTop: 13,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.07)',
+  },
+  profilePrivacyText: {
+    color: '#9CAFC1',
+    fontSize: 11,
+  },
+  signOutButton: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 8,
+    borderRadius: 13,
+    backgroundColor: 'rgba(230,57,70,0.08)',
+  },
+  signOutText: {
+    color: '#F08A91',
+    fontSize: 13,
+    fontWeight: '600',
   },
 });
